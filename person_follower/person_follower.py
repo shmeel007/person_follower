@@ -17,6 +17,7 @@ from rclpy.node import Node
 
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
+import numpy as np
 
 class PersonFollower(Node):
 
@@ -30,17 +31,38 @@ class PersonFollower(Node):
             10)
         self.subscription  # prevent unused variable warning
 
+	self.safe_distance = 0.5  # meters (stop moving if closer than this)
+        self.follow_distance = 1.0  # meters (ideal distance to maintain)
+        self.max_linear_speed = 0.3  # max forward speed
+        self.max_angular_speed = 1.0  # max turning speed
+
     def listener_callback(self, input_msg):
-        angle_min = input_msg.angle_min
-        angle_max = input_msg.angle_max
-        angle_increment = input_msg.angle_increment
-        ranges = input_msg.ranges
-        #
-        # your code for computing vx, wz
-        #
-        vx = 0.
-        wz = 0.
-        #
+        ranges = np.array(input_msg.ranges)  # Convert to NumPy array for easy processing
+        angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  # Angle values
+        
+        # Ignore invalid readings (infinity or NaN)
+        valid_ranges = np.where(np.isfinite(ranges), ranges, np.inf)
+        
+        # Find closest object
+        min_index = np.argmin(valid_ranges)
+        min_distance = valid_ranges[min_index]
+        min_angle = angles[min_index]
+
+        # Default velocities
+        vx = 0.0  # Linear velocity
+        wz = 0.0  # Angular velocity
+
+        if min_distance < np.inf:  # Ensure we have a valid detection
+            if min_distance > self.follow_distance:
+                # Move forward if too far from the person
+                vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
+            elif min_distance < self.safe_distance:
+                # Stop if too close
+                vx = -0.1  # Small backward motion to maintain distance
+            
+            # Adjust turning speed based on detected object position
+            wz = min(self.max_angular_speed, max(-self.max_angular_speed, -2.0 * min_angle))
+	# Publish movement command
         output_msg = Twist()
         output_msg.linear.x = vx
         output_msg.angular.z = wz
