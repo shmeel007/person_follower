@@ -1,8 +1,23 @@
+# Copyright 2016 Open Source Robotics Foundation, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import rclpy
 from rclpy.node import Node
+
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
-import numpy as np
+import math
 
 class PersonFollower(Node):
 
@@ -14,70 +29,49 @@ class PersonFollower(Node):
             '/scan',
             self.listener_callback,
             10)
-        
-        # Parameters
-        self.safe_distance = 0.6  # Stop if closer than this
-        self.follow_distance = 1.2  # Ideal following distance
-        self.max_linear_speed = 0.2
-        self.max_angular_speed = 0.8
-        self.prev_wz = 0.0  # Store previous angular speed for smoothing
-        self.prev_vx = 0.0  # Store previous linear speed for gradual acceleration
+        self.subscription  # prevent unused variable warning
+
+        self.desired_distance = 1.0  # Desired distance to the person (meters)
+        self.linear_speed = 0.5       # Maximum linear speed (m/s)
+        self.angular_speed = 1.0      # Maximum angular speed (rad/s)
 
     def listener_callback(self, input_msg):
-        print("LaserScan received!")  
+        angle_min = input_msg.angle_min
+        angle_max = input_msg.angle_max
+        angle_increment = input_msg.angle_increment
+        ranges = input_msg.ranges
 
-        ranges = np.array(input_msg.ranges)  
-        angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  
+        # Find the closest point (assuming it's the person)
+        min_range = float('inf')
+        min_index = -1
 
-        # Ignore invalid readings and apply basic filtering
-        valid_ranges = np.where(np.isfinite(ranges), ranges, np.inf)
-        valid_ranges = self.moving_average_filter(valid_ranges, window_size=5)
+        for i, r in enumerate(ranges):
+            if r < min_range and r > 0.1: #Ignore very small ranges and infinite ranges
+                min_range = r
+                min_index = i
 
-        # Find closest object
-        min_index = np.argmin(valid_ranges)
-        min_distance = valid_ranges[min_index]
-        min_angle = angles[min_index]
+        vx = 0.0
+        wz = 0.0
 
-        print(f"Closest object: Distance = {min_distance:.2f}, Angle = {min_angle:.2f}")
+        if min_index != -1:
+            # Calculate the angle to the closest point
+            angle = angle_min + min_index * angle_increment
 
-        # Default velocities
-        vx = 0.0  
-        wz = 0.0  
+            # Calculate the error in distance
+            distance_error = min_range - self.desired_distance
 
-        if min_distance < np.inf:  
-            if min_distance > self.follow_distance:
-                vx = min(self.max_linear_speed, 0.4 * (min_distance - self.follow_distance))  # Smoother acceleration
-            elif min_distance < self.safe_distance:
-                vx = -0.05  # Slow backward motion to avoid overshooting
-            else:
-                vx = 0.0  # Stop at the correct distance
+            # Calculate linear velocity (move towards or away from the person)
+            vx = self.linear_speed * (-distance_error)
+            vx = max(min(vx, self.linear_speed), -self.linear_speed) #Limit the linear velocity
 
-            # Smooth turning using proportional control
-            wz = -1.5 * min_angle  # Turn speed proportional to angle
-            wz = max(-self.max_angular_speed, min(self.max_angular_speed, wz))  # Limit max turning speed
+            # Calculate angular velocity (turn towards the person)
+            wz = self.angular_speed * (-angle)
+            wz = max(min(wz, self.angular_speed), -self.angular_speed) #Limit the angular velocity
 
-        # Apply smoothing to prevent oscillations
-        vx = self.smooth_velocity(vx, self.prev_vx, alpha=0.3)
-        wz = self.smooth_velocity(wz, self.prev_wz, alpha=0.4)
-
-        self.prev_vx = vx  # Store previous values for next iteration
-        self.prev_wz = wz
-
-        print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  
-
-        # Publish movement command
         output_msg = Twist()
         output_msg.linear.x = vx
         output_msg.angular.z = wz
         self.publisher_.publish(output_msg)
-
-    def moving_average_filter(self, data, window_size=3):
-        """Smooths noisy LiDAR data using a moving average filter."""
-        return np.convolve(data, np.ones(window_size)/window_size, mode='same')
-
-    def smooth_velocity(self, new_value, prev_value, alpha=0.3):
-        """Applies an exponential moving average filter to smooth motion."""
-        return alpha * new_value + (1 - alpha) * prev_value
 
 def main(args=None):
     rclpy.init(args=args)
