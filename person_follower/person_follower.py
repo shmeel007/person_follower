@@ -16,11 +16,12 @@ class PersonFollower(Node):
             10)
         
         # Parameters
-        self.safe_distance = 0.5  # Stop if closer than this
-        self.follow_distance = 1.0  # Ideal following distance
-        self.max_linear_speed = 0.3
-        self.max_angular_speed = 1.0
-        self.is_moving_backward = False  
+        self.safe_distance = 0.6  # Stop if closer than this
+        self.follow_distance = 1.2  # Ideal following distance
+        self.max_linear_speed = 0.2
+        self.max_angular_speed = 0.8
+        self.prev_wz = 0.0  # Store previous angular speed for smoothing
+        self.prev_vx = 0.0  # Store previous linear speed for gradual acceleration
 
     def listener_callback(self, input_msg):
         print("LaserScan received!")  
@@ -28,8 +29,9 @@ class PersonFollower(Node):
         ranges = np.array(input_msg.ranges)  
         angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  
 
-        # Ignore invalid readings
+        # Ignore invalid readings and apply basic filtering
         valid_ranges = np.where(np.isfinite(ranges), ranges, np.inf)
+        valid_ranges = self.moving_average_filter(valid_ranges, window_size=5)
 
         # Find closest object
         min_index = np.argmin(valid_ranges)
@@ -44,34 +46,22 @@ class PersonFollower(Node):
 
         if min_distance < np.inf:  
             if min_distance > self.follow_distance:
-                vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
-                self.is_moving_backward = False  
+                vx = min(self.max_linear_speed, 0.4 * (min_distance - self.follow_distance))  # Smoother acceleration
             elif min_distance < self.safe_distance:
-                if not self.is_moving_backward:  
-                    vx = -0.1  
-                    self.is_moving_backward = True
-                    print("Too close! Moving backward...")
+                vx = -0.05  # Slow backward motion to avoid overshooting
             else:
-                vx = 0.0  
-                self.is_moving_backward = False  
+                vx = 0.0  # Stop at the correct distance
 
-            # Smooth turning toward the detected object
-            wz = -2.0 * min_angle  # Ensure correct turn direction
+            # Smooth turning using proportional control
+            wz = -1.5 * min_angle  # Turn speed proportional to angle
+            wz = max(-self.max_angular_speed, min(self.max_angular_speed, wz))  # Limit max turning speed
 
-        # New Fix: Stop after moving backward, then reassess before moving forward
-        if self.is_moving_backward:
-            print("Moving backward, stopping after 2 seconds...")
-            self.get_clock().sleep_for(rclpy.duration.Duration(seconds=2))  
-            vx = 0.0  
-            wz = 0.0  
-            self.is_moving_backward = False  
-            print("Stopped. Checking if it's safe to move forward...")
+        # Apply smoothing to prevent oscillations
+        vx = self.smooth_velocity(vx, self.prev_vx, alpha=0.3)
+        wz = self.smooth_velocity(wz, self.prev_wz, alpha=0.4)
 
-            # After stopping, force re-evaluation of person’s position
-            if min_distance > self.safe_distance:
-                print("Person moved to followable distance, resuming movement!")
-                vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
-                wz = -2.0 * min_angle  # Ensure proper turning towards person
+        self.prev_vx = vx  # Store previous values for next iteration
+        self.prev_wz = wz
 
         print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  
 
@@ -80,6 +70,14 @@ class PersonFollower(Node):
         output_msg.linear.x = vx
         output_msg.angular.z = wz
         self.publisher_.publish(output_msg)
+
+    def moving_average_filter(self, data, window_size=3):
+        """Smooths noisy LiDAR data using a moving average filter."""
+        return np.convolve(data, np.ones(window_size)/window_size, mode='same')
+
+    def smooth_velocity(self, new_value, prev_value, alpha=0.3):
+        """Applies an exponential moving average filter to smooth motion."""
+        return alpha * new_value + (1 - alpha) * prev_value
 
 def main(args=None):
     rclpy.init(args=args)
