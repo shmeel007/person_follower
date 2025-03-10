@@ -21,7 +21,7 @@ mkdir -p ~/ros2_ws/src
 3. Clone this repository and build the package
 ```
 cd ~/ros2_ws/src
-git clone https://github.com/RobInLabUJI/person_follower.git
+git clone https://github.com/shmeel007/person_follower.git
 cd ..
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
