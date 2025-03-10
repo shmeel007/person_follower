@@ -1,17 +1,3 @@
-# Copyright 2016 Open Source Robotics Foundation, Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
@@ -19,6 +5,7 @@ from geometry_msgs.msg import Twist
 import numpy as np
 
 class PersonFollower(Node):
+
     def __init__(self):
         super().__init__('person_follower')
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -30,16 +17,16 @@ class PersonFollower(Node):
         
         # Parameters
         self.safe_distance = 0.5  # Stop if closer than this
-        self.follow_distance = 1.0  # Try to maintain this distance
+        self.follow_distance = 1.0  # Ideal following distance
         self.max_linear_speed = 0.3
         self.max_angular_speed = 1.0
-        self.is_moving_backward = False  # Flag to track backward movement
-    
-    def listener_callback(self, input_msg):
-        print("LaserScan received!")  # Debugging step 1
+        self.is_moving_backward = False  
 
-        ranges = np.array(input_msg.ranges)  # Convert to NumPy array
-        angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  # Get corresponding angles
+    def listener_callback(self, input_msg):
+        print("LaserScan received!")  
+
+        ranges = np.array(input_msg.ranges)  
+        angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  
 
         # Ignore invalid readings
         valid_ranges = np.where(np.isfinite(ranges), ranges, np.inf)
@@ -52,32 +39,40 @@ class PersonFollower(Node):
         print(f"Closest object: Distance = {min_distance:.2f}, Angle = {min_angle:.2f}")
 
         # Default velocities
-        vx = 0.0  # Linear velocity
-        wz = 0.0  # Angular velocity
+        vx = 0.0  
+        wz = 0.0  
 
-        if min_distance < np.inf:  # Ensure valid detection
+        if min_distance < np.inf:  
             if min_distance > self.follow_distance:
                 vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
-                self.is_moving_backward = False  # Reset backward flag
+                self.is_moving_backward = False  
             elif min_distance < self.safe_distance:
-                vx = -0.1  # Move slightly backward if too close
-                self.is_moving_backward = True
+                if not self.is_moving_backward:  
+                    vx = -0.1  
+                    self.is_moving_backward = True
+                    print("Too close! Moving backward...")
             else:
-                vx = 0.0  # Stop when at the perfect distance
-                self.is_moving_backward = False
-            
-            # Adjust turning speed towards the detected object
+                vx = 0.0  
+                self.is_moving_backward = False  
+
+            # Smooth turning toward the detected object
             wz = min(self.max_angular_speed, max(-self.max_angular_speed, -2.0 * min_angle))
 
-        # New Fix: Stop after moving backward and recheck surroundings
+        # New Fix: Stop after moving backward, then reassess before moving forward
         if self.is_moving_backward:
             print("Moving backward, stopping after 2 seconds...")
-            self.get_clock().sleep_for(rclpy.duration.Duration(seconds=2))  # Pause for 2 seconds
-            vx = 0.0  # Stop backward motion
-            wz = 0.0  # Stop rotation
-            self.is_moving_backward = False  # Reset flag
+            self.get_clock().sleep_for(rclpy.duration.Duration(seconds=2))  
+            vx = 0.0  
+            wz = 0.0  
+            self.is_moving_backward = False  
+            print("Stopped. Checking if it's safe to move forward...")
 
-        print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  # Debugging step 3
+        # After stopping, resume moving forward if the person is at a followable distance
+        if min_distance > self.safe_distance and min_distance < self.follow_distance:
+            print("Person moved to followable distance, resuming movement!")
+            vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
+
+        print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  
 
         # Publish movement command
         output_msg = Twist()
