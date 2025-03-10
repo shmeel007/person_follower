@@ -56,7 +56,7 @@ class PersonFollower(Node):
                 self.is_moving_backward = False  
 
             # Smooth turning toward the detected object
-            wz = min(self.max_angular_speed, max(-self.max_angular_speed, -2.0 * min_angle))
+            wz = -2.0 * min_angle  # Ensure correct turn direction
 
         # New Fix: Stop after moving backward, then reassess before moving forward
         if self.is_moving_backward:
@@ -67,10 +67,11 @@ class PersonFollower(Node):
             self.is_moving_backward = False  
             print("Stopped. Checking if it's safe to move forward...")
 
-        # After stopping, resume moving forward if the person is at a followable distance
-        if min_distance > self.safe_distance and min_distance < self.follow_distance:
-            print("Person moved to followable distance, resuming movement!")
-            vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
+            # After stopping, force re-evaluation of person’s position
+            if min_distance > self.safe_distance:
+                print("Person moved to followable distance, resuming movement!")
+                vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
+                wz = -2.0 * min_angle  # Ensure proper turning towards person
 
         print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  
 
