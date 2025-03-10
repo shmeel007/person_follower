@@ -19,7 +19,6 @@ from geometry_msgs.msg import Twist
 import numpy as np
 
 class PersonFollower(Node):
-
     def __init__(self):
         super().__init__('person_follower')
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -34,53 +33,57 @@ class PersonFollower(Node):
         self.follow_distance = 1.0  # Try to maintain this distance
         self.max_linear_speed = 0.3
         self.max_angular_speed = 1.0
+        self.is_moving_backward = False  # Flag to track backward movement
+    
+    def listener_callback(self, input_msg):
+        print("LaserScan received!")  # Debugging step 1
 
-   def listener_callback(self, input_msg):
-    print("LaserScan received!")  # Debugging step 1
+        ranges = np.array(input_msg.ranges)  # Convert to NumPy array
+        angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  # Get corresponding angles
 
-    ranges = np.array(input_msg.ranges)  # Convert to NumPy array
-    angles = np.linspace(input_msg.angle_min, input_msg.angle_max, len(ranges))  # Get corresponding angles
+        # Ignore invalid readings
+        valid_ranges = np.where(np.isfinite(ranges), ranges, np.inf)
 
-    # Ignore invalid readings
-    valid_ranges = np.where(np.isfinite(ranges), ranges, np.inf)
+        # Find closest object
+        min_index = np.argmin(valid_ranges)
+        min_distance = valid_ranges[min_index]
+        min_angle = angles[min_index]
 
-    # Find closest object
-    min_index = np.argmin(valid_ranges)
-    min_distance = valid_ranges[min_index]
-    min_angle = angles[min_index]
+        print(f"Closest object: Distance = {min_distance:.2f}, Angle = {min_angle:.2f}")
 
-    print(f"Closest object: Distance = {min_distance:.2f}, Angle = {min_angle:.2f}")  # Debugging step 2
+        # Default velocities
+        vx = 0.0  # Linear velocity
+        wz = 0.0  # Angular velocity
 
-    # Default velocities
-    vx = 0.0  # Linear velocity
-    wz = 0.0  # Angular velocity
+        if min_distance < np.inf:  # Ensure valid detection
+            if min_distance > self.follow_distance:
+                vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
+                self.is_moving_backward = False  # Reset backward flag
+            elif min_distance < self.safe_distance:
+                vx = -0.1  # Move slightly backward if too close
+                self.is_moving_backward = True
+            else:
+                vx = 0.0  # Stop when at the perfect distance
+                self.is_moving_backward = False
+            
+            # Adjust turning speed towards the detected object
+            wz = min(self.max_angular_speed, max(-self.max_angular_speed, -2.0 * min_angle))
 
-    if min_distance < np.inf:  # Ensure valid detection
-        if min_distance > self.follow_distance:
-            vx = min(self.max_linear_speed, 0.5 * (min_distance - self.follow_distance))
-        elif min_distance < self.safe_distance:
-            vx = -0.1  # Move slightly backward if too close
-        else:
-            vx = 0.0  # Stop when at the perfect distance
-        
-        # Adjust turning speed towards the detected object
-        wz = min(self.max_angular_speed, max(-self.max_angular_speed, -2.0 * min_angle))
+        # New Fix: Stop after moving backward and recheck surroundings
+        if self.is_moving_backward:
+            print("Moving backward, stopping after 2 seconds...")
+            self.get_clock().sleep_for(rclpy.duration.Duration(seconds=2))  # Pause for 2 seconds
+            vx = 0.0  # Stop backward motion
+            wz = 0.0  # Stop rotation
+            self.is_moving_backward = False  # Reset flag
 
-    # New Fix: If the robot moved back, reset movement after a delay
-    if vx < 0:  # If moving backward
-        print("Moving backward, resetting after 2 seconds")
-        rclpy.spin_once(self, timeout_sec=2)  # Pause for 2 seconds
-        vx = 0.0  # Stop backward motion
-        wz = 0.0  # Stop rotation
+        print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  # Debugging step 3
 
-    print(f"Publishing cmd: vx = {vx:.2f}, wz = {wz:.2f}")  # Debugging step 3
-
-    # Publish movement command
-    output_msg = Twist()
-    output_msg.linear.x = vx
-    output_msg.angular.z = wz
-    self.publisher_.publish(output_msg)
-
+        # Publish movement command
+        output_msg = Twist()
+        output_msg.linear.x = vx
+        output_msg.angular.z = wz
+        self.publisher_.publish(output_msg)
 
 def main(args=None):
     rclpy.init(args=args)
